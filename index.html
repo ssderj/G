@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en" style="background: #17171B;">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<!-- Matches app.css's dark background, so the OS-drawn chrome around the page (mobile browser
+     address/status bar tint, and the safe-area gutters on notched devices thanks to
+     viewport-fit=cover above) reads as part of the same dark canvas instead of flashing white. -->
+<meta name="theme-color" content="#17171B" />
+<title>Inkroot — a home for the whole story</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<!-- Paystack's own inline checkout popup (see src/lib/payments.js's checkoutBook) — loaded here
+     rather than only on-demand so the very first "Buy"/"Tip" click doesn't have to wait on a
+     fresh script fetch. See PAYMENTS.md for the full Naira-payments setup. -->
+<script src="https://js.paystack.co/v2/inline.js"></script>
+</head>
+<body style="background: #17171B;">
+<div id="root"></div>
+<script type="module" src="/src/main.jsx"></script>
+</body>
+</html>

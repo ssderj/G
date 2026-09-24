@@ -1,0 +1,352 @@
+  /* Full-page dark background, everywhere the viewport could ever show a color, so there's
+     never a white flash — not on initial paint, not on iOS/Android rubber-band overscroll,
+     not in the safe-area gutters around a notch/home-indicator. `color-scheme: dark` stops the
+     OS from painting its own light-mode default (e.g. the elastic-scroll glow, scrollbar chrome)
+     underneath us; `overscroll-behavior: none` stops the bounce from ever revealing anything
+     behind the document in the first place, which is the actual fix for the "white on scroll"
+     symptom (background-color alone doesn't prevent it on iOS Safari). Both `100%` and the
+     dynamic-viewport `100dvh` are set on purpose: `100%` is what makes the background paint
+     the *entire* scrollable canvas (a bare height:100dvh with a shorter body would still leave
+     the overscroll canvas below the fold unstyled), while `100dvh` on #root keeps the app's own
+     min-height correct as mobile browser chrome (address bar) shows/hides. */
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0; background: #17171B;
+    height: 100%; overscroll-behavior: none;
+  }
+  #root { min-height: 100vh; min-height: 100dvh; background: #17171B; }
+  /* Paper-grain texture: a faint, static noise layer over the whole app, tying the "ink and
+     parchment" concept together at the pixel level rather than just in color choice. Built as
+     an inline SVG feTurbulence data URI (no external asset — this is a single file with no
+     bundler), tiled at 140x140px. Sits on a `body::after` fixed pseudo-element rather than on
+     #root, so it's anchored to the viewport and never scrolls or repaints with page content —
+     important on long text-heavy screens like the chapter editor. `pointer-events: none` keeps
+     it from ever intercepting a tap/click, and the very high z-index is deliberate: it needs to
+     sit above every modal/overlay/toast in the app (the highest in-app z-index today is 5000)
+     so the grain reads consistently across every layer, not just the base screen. Opacity is
+     kept extremely low (2.5%) and blended with `overlay` rather than drawn as flat noise on
+     top, so it reads as "this feels like paper" rather than visible static, and doesn't touch
+     text legibility anywhere, including PublishedBookReader's long-form reading view. Static,
+     not animated, so there's nothing here for prefers-reduced-motion to need to disable. */
+  body::after {
+    content: ''; position: fixed; inset: 0; z-index: 9999; pointer-events: none;
+    opacity: 0.025; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+  }
+  #load-fallback { min-height:100vh;display:flex;align-items:center;justify-content:center;background:#17171B;color:#EFE7D2;font-family:ui-sans-serif,system-ui;text-align:center;padding:24px; }
+  /* ---------- Shared animation tokens ----------
+     Every transition/animation in the app pulls its duration and easing from these two
+     variables so motion reads as one consistent "voice" everywhere (page nav, modals,
+     accordions, dropdowns, tree/web updates, markers, theme swaps) instead of a patchwork
+     of ad-hoc speeds. 240ms sits in the middle of the 200-300ms brief; the ease-out curve
+     front-loads the motion so it reads as quick and native rather than sluggish. */
+  :root { --ink-dur: 240ms; --ink-ease: cubic-bezier(0.16, 1, 0.3, 1); }
+  /* Top-level page transition used when swapping the Home screen for a project workspace
+     (and back) — the two are entirely different component trees, so this plays on mount
+     rather than animating a shared element. */
+  @keyframes inkPageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .ink-page-in { animation: inkPageIn var(--ink-dur) var(--ink-ease); }
+  /* Distance Calculator route line (RoutePreviewMap): a slow, gentle pulse on top of the SVG
+     glow filter so the path visibly reads as "lit up" rather than a flat static line. */
+  @keyframes inkRouteGlowPulse { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+  .ink-route-glow-line { animation: inkRouteGlowPulse 2.2s ease-in-out infinite; }
+  /* Respect the OS-level reduced-motion setting: collapse every animation/transition in the
+     app to effectively instant rather than removing it outright, so state changes still
+     happen correctly, they just don't animate. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+    }
+  }
+  /* Guild Level reward cosmetics (Level 10 Animated Crest, Level 30 Golden Name) — purely
+     decorative flourishes with no gameplay effect, folded into the shared reduced-motion rule
+     above like every other animation in the app. */
+  @keyframes inkCrestPulse { 0%, 100% { filter: drop-shadow(0 0 6px rgba(232,196,104,0.35)); } 50% { filter: drop-shadow(0 0 18px rgba(232,196,104,0.7)); } }
+  .guild-crest-animated { animation: inkCrestPulse 2.6s ease-in-out infinite; }
+  @keyframes inkGoldNameShimmer { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+  .guild-name-golden {
+    background: linear-gradient(90deg, #A9812E, #FCEABB, #E8C468, #FCEABB, #A9812E);
+    background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: inkGoldNameShimmer 3.5s linear infinite;
+  }
+  /* Living Guild Hall — the Hall itself is a small illustrated environment that grows in on the
+     spot every time the guild crosses one of the same level thresholds as GUILD_LEVEL_REWARDS.
+     ghBuildRise is the one-time "construction" ceremony a new piece plays the moment it's first
+     built (see GuildHallEnvironment's justBuilt()); ghDustMote is the brief settling-dust scatter
+     that plays alongside it. Everything already standing keeps its normal look after that — the
+     Hall doesn't re-build itself on every visit, only the first time a threshold is newly met.
+     ghWindowGlow and ghFlagWave are small idle ambience (lit windows breathing, a flag stirring)
+     that run continuously regardless of level, so the Hall always reads as a living place rather
+     than a static picture even between milestones. */
+  @keyframes ghBuildRise { 0% { opacity: 0; transform: translateY(28px) scaleY(0.6); } 60% { opacity: 1; transform: translateY(-4px) scaleY(1.04); } 100% { opacity: 1; transform: translateY(0) scaleY(1); } }
+  .gh-building { animation: ghBuildRise 900ms cubic-bezier(0.16, 1, 0.3, 1); transform-origin: bottom center; }
+  @keyframes ghDustMote { 0% { opacity: 0; transform: translateY(0) scale(0.4); } 30% { opacity: 1; } 100% { opacity: 0; transform: translateY(-30px) scale(1); } }
+  .gh-dust span { animation: ghDustMote 900ms ease-out forwards; }
+  @keyframes ghFlagWave { 0%, 100% { transform: skewX(0deg); } 50% { transform: skewX(-6deg); } }
+  .gh-flag-wave { animation: ghFlagWave 2.4s ease-in-out infinite; transform-origin: left center; }
+  @keyframes ghWindowGlow { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+  .gh-window-lit { animation: ghWindowGlow 3.2s ease-in-out infinite; }
+  @keyframes ghFlameFlicker { 0%, 100% { transform: scaleY(1) scaleX(1); opacity: 0.9; } 25% { transform: scaleY(1.12) scaleX(0.94); opacity: 1; } 50% { transform: scaleY(0.94) scaleX(1.05); opacity: 0.85; } 75% { transform: scaleY(1.08) scaleX(0.97); opacity: 0.95; } }
+  .gh-flame { animation: ghFlameFlicker 1.6s ease-in-out infinite; transform-origin: bottom center; }
+  @keyframes ghScribeWalk { 0% { transform: translateX(0); } 50% { transform: translateX(64px); } 100% { transform: translateX(0); } }
+  .gh-scribe-walk { animation: ghScribeWalk 6s ease-in-out infinite; }
+  /* Level 30 "The Legendary Kingdom" — a slow golden-light breathing wash over the whole scene,
+     standing in for the "Golden lighting" unlock. Folds into the shared reduced-motion rule above
+     like every other Guild Hall animation. */
+  @keyframes ghGoldenHaze { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.6; } }
+  .gh-golden-haze { animation: ghGoldenHaze 4s ease-in-out infinite; }
+  /* ---------- The Grand Library — medieval royal-library atmosphere ----------
+     Purely decorative dressing rendered behind GrandLibraryScreen (see GrandLibraryAtmosphere):
+     a stone-block wall, two tall arched windows spilling in warm daylight, a hanging candle
+     chandelier, and drifting dust motes lit by its glow — so the screen reads as a chronicle
+     hall rather than a storefront. A small page-turn flourish plays on a book cover's hover to
+     echo that same "physical book" feeling on the cards themselves. Folds into the shared
+     reduced-motion rule above like every other animation in the app. */
+  @keyframes glCandleFlicker { 0%, 100% { transform: scaleY(1) scaleX(1) rotate(0deg); opacity: 0.92; } 20% { transform: scaleY(1.1) scaleX(0.92) rotate(-2deg); opacity: 1; } 45% { transform: scaleY(0.9) scaleX(1.06) rotate(2deg); opacity: 0.85; } 70% { transform: scaleY(1.05) scaleX(0.96) rotate(-1deg); opacity: 0.97; } }
+  .gl-flame { animation: glCandleFlicker 1.8s ease-in-out infinite; transform-origin: bottom center; }
+  @keyframes glChandelierSway { 0%, 100% { transform: translateX(-50%) rotate(-0.6deg); } 50% { transform: translateX(-50%) rotate(0.6deg); } }
+  .gl-chandelier { animation: glChandelierSway 5s ease-in-out infinite; transform-origin: top center; }
+  @keyframes glDustFloat { 0% { transform: translateY(0) translateX(0); opacity: 0; } 10% { opacity: 0.7; } 90% { opacity: 0.45; } 100% { transform: translateY(-160px) translateX(14px); opacity: 0; } }
+  .gl-dust-mote { animation-name: glDustFloat; animation-timing-function: linear; animation-iteration-count: infinite; }
+  @keyframes glWindowGlow { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.85; } }
+  .gl-window-light { animation: glWindowGlow 4.5s ease-in-out infinite; }
+  @keyframes glPageTurn { 0% { transform: perspective(300px) rotateY(0deg); } 50% { transform: perspective(300px) rotateY(-35deg); } 100% { transform: perspective(300px) rotateY(0deg); } }
+  .gl-book-cover:hover .gl-page-corner { animation: glPageTurn 650ms ease-in-out; }
+  /* Featured Chronicle card, above New Releases (see FeaturedChronicleCard): a slow golden glow
+     around the card itself, plus a soft column of light that drifts down from the hanging
+     chandelier (see GrandLibraryAtmosphere's .gl-chandelier) as if that's genuinely where it's
+     coming from. Both very slow and low-amplitude on purpose — this sits above the shelves
+     permanently, so it needs to read as ambient light, not a UI effect competing for attention. */
+  @keyframes glFeaturedGlow { 0%, 100% { box-shadow: 0 0 24px 2px rgba(232,196,104,0.18), 0 12px 32px rgba(0,0,0,0.4); } 50% { box-shadow: 0 0 42px 8px rgba(232,196,104,0.32), 0 12px 32px rgba(0,0,0,0.4); } }
+  .gl-featured-card { animation: glFeaturedGlow 5.5s ease-in-out infinite; }
+  @keyframes glLampLightFloat { 0%, 100% { transform: translate(-50%, 0) scaleY(1); opacity: 0.5; } 50% { transform: translate(-50%, 14px) scaleY(1.08); opacity: 0.8; } }
+  .gl-lamp-light { animation: glLampLightFloat 6.5s ease-in-out infinite; }
+  /* Home hero (see LibraryHero) and the sections below it: a slow, weighty "unrolled scroll"
+     entrance rather than a plain fade — each section carries its own animation-delay inline so
+     they arrive in a gentle cascade down the page instead of all at once. transform-origin stays
+     at the top so it reads as unfurling downward, like parchment falling open. */
+  @keyframes inkParchmentUnfurl { 0% { opacity: 0; transform: translateY(16px) scaleY(0.97); } 100% { opacity: 1; transform: translateY(0) scaleY(1); } }
+  .ink-parchment-in { animation: inkParchmentUnfurl 620ms cubic-bezier(0.22, 0.61, 0.36, 1) both; transform-origin: top center; }
+  @keyframes inkHeroTitleGlow { 0%, 100% { filter: drop-shadow(0 0 10px rgba(232,196,104,0.28)); } 50% { filter: drop-shadow(0 0 22px rgba(232,196,104,0.5)); } }
+  .ink-hero-wordmark { animation: inkHeroTitleGlow 4.5s ease-in-out infinite; }
+  /* ---------- Author Inbox — "The Correspondence Hall" ----------
+     Unread letters arrive sealed in wax (see InboxLetterCard); ai-seal-breathe is the idle glow
+     on a still-sealed letter, ai-seal-crack plays once when the writer opens it, right before the
+     letter unfolds (ai-unfold). ai-card-in staggers each letter's entrance the same "gentle
+     cascade" way ink-parchment-in does above. Folds into the shared reduced-motion rule below
+     like every other animation in the app. */
+  @keyframes aiCardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .ai-card-in { animation: aiCardIn var(--ink-dur) var(--ink-ease) both; }
+  @keyframes aiUnfold { from { opacity: 0; transform: scaleY(0.92); } to { opacity: 1; transform: scaleY(1); } }
+  .ai-unfold { animation: aiUnfold 260ms var(--ink-ease) both; transform-origin: top; }
+  @keyframes aiSealBreathe { 0%, 100% { box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 2px 5px rgba(0,0,0,0.4), 0 0 0px rgba(232,196,104,0); } 50% { box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 2px 5px rgba(0,0,0,0.4), 0 0 9px rgba(232,196,104,0.35); } }
+  .ai-seal-breathe { animation: aiSealBreathe 3.4s ease-in-out infinite; }
+  @keyframes aiSealCrack { 0% { transform: scale(1) rotate(0deg); opacity: 1; } 35% { transform: scale(1.14) rotate(-6deg); opacity: 1; } 70% { transform: scale(0.85) rotate(4deg); opacity: 0.5; } 100% { transform: scale(0.5) rotate(10deg); opacity: 0; } }
+  .ai-seal-crack { animation: aiSealCrack 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+  /* Small brass medallion badge — a radial-gradient dark circle in a gold ring, the same look
+     the Writer Profile avatar button and Home's wall sconces already use — reused here for
+     HomeQuickActionTile so every round brass fixture in the app reads as one consistent piece
+     of hardware rather than a flat icon-in-a-box. */
+  .ink-brass-medallion {
+    width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 34% 28%, #2A2620, #17140F 72%);
+    border: 1.5px solid #C89B3C; box-shadow: 0 0 0 2px #100E0A, 0 0 10px rgba(200,155,60,0.2), inset 0 1px 2px rgba(255,255,255,0.06);
+    transition: box-shadow var(--ink-dur) var(--ink-ease);
+  }
+  .ink-brass-tile:hover .ink-brass-medallion {
+    box-shadow: 0 0 0 2px #100E0A, 0 0 16px rgba(200,155,60,0.4), inset 0 1px 2px rgba(255,255,255,0.08);
+  }
+  /* ---------- 3D book covers (BookCover) ----------
+     Every bookshelf/gallery cover in the app (Home's featured card + shelf row, the Grand
+     Library's shelves, Guild Hall, the Author's Hall, publishing previews, the cover picker...)
+     renders through the one shared BookCover component, so giving it real dimensionality here —
+     thickness, a spine, layered off-white page edges, a soft grounding shadow, a gentle idle
+     tilt, and a fuller lift/rotate on hover — reaches every one of those screens without
+     touching their own code (see book3DShell in book-cover.jsx). The cover art itself is left
+     completely untouched; it's just pushed forward as the front face of a small rotating volume
+     built from flat layered planes at different depths, which is cheaper and more robust than
+     true perpendicular cube faces and reads just as convincingly at these subtle tilt angles.
+     Folds into the shared reduced-motion rule above like every other animation in the app. */
+  .ink-book3d { transform-style: preserve-3d; }
+  .ink-book3d-vol {
+    /* --book-tilt lets a specific shelf (e.g. the Grand Library's bookcase — see book3DShell's
+       `variation` param) give individual books a slightly different idle angle than the shared
+       -7deg default, so a row of books doesn't all lean the exact same way. Untouched anywhere
+       that doesn't set it. */
+    transform: rotateY(var(--book-tilt, -7deg));
+    transition: transform 520ms var(--ink-ease);
+    transform-style: preserve-3d;
+    will-change: transform;
+  }
+  .ink-book3d:hover .ink-book3d-vol, .ink-book3d:focus-within .ink-book3d-vol {
+    transform: rotateY(calc(var(--book-tilt, -7deg) - 13deg)) translateY(-6px) scale(1.015);
+  }
+  .ink-book3d-shadow {
+    /* The wide, soft ambient pool a book casts into the space around it — a touch warmer than
+       flat black (a hint of the same candlelit warmth as the rest of the app, not a neutral
+       studio shadow) and now two overlapping falloffs instead of one, so the edge reads as a
+       gradual dimming rather than a single hard-edged blur ring. */
+    position: absolute; left: 8%; right: 8%; bottom: -8%; height: 18%;
+    background:
+      radial-gradient(closest-side, rgba(10,7,3,0.4), rgba(10,7,3,0) 72%),
+      radial-gradient(closest-side, rgba(10,7,3,0.22), rgba(10,7,3,0) 100%);
+    filter: blur(6px); opacity: 0.7; transform: scaleX(0.92);
+    transition: opacity 520ms var(--ink-ease), transform 520ms var(--ink-ease), filter 520ms var(--ink-ease);
+  }
+  .ink-book3d:hover .ink-book3d-shadow, .ink-book3d:focus-within .ink-book3d-shadow {
+    opacity: 0.45; transform: scaleX(1.1) translateY(4px); filter: blur(10px);
+  }
+  /* A second, much tighter shadow layer sitting right under the book's own base — the contact/
+     ambient-occlusion shadow for where the book actually touches the shelf, as distinct from the
+     wider ambient pool above. Barely blurred and narrow on purpose: real contact shadow is dark
+     and crisp right at the touch point, then hands off to the softer cast shadow around it. Left
+     static (no hover animation) since it's meant to read as fixed to the shelf, not the book. */
+  .ink-book3d-contact {
+    position: absolute; left: 8%; right: 8%; bottom: -3%; height: 7%;
+    background: radial-gradient(closest-side, rgba(5,3,1,0.55), rgba(5,3,1,0) 82%);
+    filter: blur(1.5px); opacity: 0.85; transform: scaleX(0.86); pointer-events: none;
+  }
+  .ink-book3d-sheen {
+    /* One warm light source from the upper-left (matching the candlelit/chandelier lighting used
+       everywhere else in the app) rather than a neutral white gloss: the near corner picks up a
+       warm cream highlight, the far corner falls into a faint warm-dark shadow, so the sheen
+       reads as directional light rather than an even overall gloss coat. */
+    position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(115deg, rgba(255,241,214,0.22) 0%, rgba(255,241,214,0) 30%, rgba(0,0,0,0) 68%, rgba(20,12,4,0.14) 100%);
+    opacity: 0.8; transition: opacity 520ms var(--ink-ease);
+  }
+  .ink-book3d:hover .ink-book3d-sheen, .ink-book3d:focus-within .ink-book3d-sheen {
+    opacity: 1;
+  }
+  /* ---------- Full physical-object book shell (Home's Recent Activity shelf only) ----------
+     book3DShellFull (book-cover.jsx) builds each Recent Activity book as a real six-faced box —
+     true front/back cover faces and a true spine face, plus page-block faces on the fore-edge
+     and top — instead of the flat gradient-strip illusion every other shelf still uses via
+     book3DShell. .ink-book3d-full only adds transform-style so those faces actually compose in
+     3D; it shares .ink-book3d itself (and so the same ambient/contact shadow and perspective)
+     with every other cover, and its inner .ink-book3d-vol is the exact same class (same idle
+     yaw tilt, same hover-lift) untouched above — nothing here changes how any other shelf's
+     books look. .ink-book3d-pitch is a new wrapper between the two: a small constant backward
+     pitch on a second axis so the book is seen at a slight downward angle, which is what makes
+     the top page-edge face visible at all (without it, that face is perfectly edge-on to a
+     purely-yawed camera) — this is static geometry, not an animation, and doesn't touch
+     .ink-book3d-vol's own hover transition. */
+  .ink-book3d-full { transform-style: preserve-3d; }
+  .ink-book3d-pitch {
+    /* -7deg left the top page-edge face foreshortened to near-invisibility at production
+       thumbnail size — verified by rendering the real component standalone at actual scale.
+       -16deg keeps the "looking slightly down at it" read (still a shelf book, not a floating
+       3D-modeler view) while actually letting that face read as a page block. */
+    position: absolute; inset: 0; transform-style: preserve-3d; transform: rotateX(-16deg);
+  }
+  /* Small, uneven gaps between books on a shelf. Every shelf row in the app (.shelf-item on
+     Home/Guild Hall's wooden ledges, .gl-shelf-item on the Grand Library's curated rows) already
+     lays its books out with one fixed flex gap — tidy, but a real shelf never has perfectly even
+     spacing between every spine. Nudging alternating books a couple of pixels further apart via
+     nth-child (no per-book JS needed, and it's the same handful of books repeating the same
+     offset pattern rather than a new random gap on every render) breaks up that too-uniform
+     rhythm without touching any shelf's own layout code. (A third, negative-margin nudge used to
+     sit here too, pulling one book closer — removed because it could eat back into the space
+     book-cover.jsx now reserves for each book's own depth/tilt overflow; see coverReservePx
+     there.) */
+  .shelf-item:nth-child(4n), .gl-shelf-item:nth-child(4n) { margin-right: 4px; }
+  .shelf-item:nth-child(7n), .gl-shelf-item:nth-child(7n) { margin-left: 2px; }
+  /* ---------- Responsive foundations ----------
+     Inkroot was originally built as a single fixed-width column tuned for a phone screen, then
+     just left to stretch on anything wider — the exact thing this pass is meant to fix. These
+     are the shared, app-wide pieces of that fix; each screen's own layout still decides how to
+     use the extra room (a wider content column, more grid columns, a persisted sidebar instead
+     of a mobile drawer — see project-workspace.jsx's .reading-container/.sidebar for the
+     existing example this follows), but the breakpoints and the two recurring patterns —
+     "reflow into a responsive grid" and "let this one row scroll horizontally on purpose" — are
+     centralized here so every screen picks from the same small vocabulary instead of inventing
+     its own. Breakpoints: phone <640, tablet 640-1023, laptop 1024-1439, desktop >=1440 — the
+     same steps project-workspace.jsx's .reading-container already uses. */
+  html, body {
+    /* Belt-and-suspenders against any element that (accidentally) runs past the viewport edge
+       causing the whole page to gain a horizontal scrollbar — normal page content should never
+       need to scroll sideways. Deliberately only on the outermost scroller: a descendant with
+       its own `overflow-x: auto` (a bookshelf, a shelf-scroll carousel, the episode list) keeps
+       scrolling horizontally exactly as intended, since that's a separate scroll container. */
+    overflow-x: hidden;
+  }
+  /* A responsive, centered content column for top-level screens (Home, the Grand Library, Author
+     Studio, Guild, the Author's Hall...) to render inside, in place of a bare hardcoded
+     `maxWidth: 640`. Grows in steps rather than filling the viewport, so text and cards keep a
+     comfortable, readable width instead of stretching into long, hard-to-scan lines on a wide
+     monitor — the actual reflow into more columns happens in each screen's own grid (see
+     .ink-grid-2/.ink-grid-cards below), not by this container just getting wider and wider.
+     Side padding is intentionally constant across all four steps: several screens (the Home
+     bookshelf, the Grand Library's shelf rows) bleed their own horizontal carousels edge-to-edge
+     by canceling this exact padding with a matching negative margin, and a padding that changed
+     per breakpoint would silently break that math at each step. */
+  .ink-page-container { width: 100%; max-width: 640px; margin: 0 auto; padding: 0 24px; box-sizing: border-box; }
+  @media (min-width: 640px) { .ink-page-container { max-width: 800px; } }
+  @media (min-width: 1024px) { .ink-page-container { max-width: 1040px; } }
+  @media (min-width: 1440px) { .ink-page-container { max-width: 1240px; } }
+  /* Two-column reflow for a handful of full-width "cards" that only need to stack on a phone
+     because there isn't room for them side by side — e.g. Home's Featured Book + Story Health
+     paired against Today's Inspiration + Quick Actions + News. Single column below 900px (a
+     tablet in portrait still reads these better stacked); two columns from 900px up. */
+  .ink-grid-2 { display: flex; flex-direction: column; gap: 20px; }
+  @media (min-width: 900px) {
+    .ink-grid-2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 28px; align-items: start; }
+  }
+  /* Responsive card grid for "normal page content" that lists many same-shaped cards — Browse &
+     Search results, Author Studio's book/pack shelves, a Worldbuilding Pack list — as opposed to
+     a curated carousel row (New Releases, Recommended, an episode list), which should keep
+     scrolling horizontally instead (see .ink-hscroll). One column on a phone, exactly like
+     today; reflows into more, narrower columns as there's room, rather than one column just
+     getting wider and wider up to desktop width. minmax's lower bound (300px) is sized to
+     LibraryDiscoverCard/AuthorStudioBookCard's own content (a book cover plus several lines of
+     text) so a column never gets so narrow the card's text wraps awkwardly. */
+  .ink-grid-cards {
+    display: grid; grid-template-columns: 1fr; gap: 14px;
+  }
+  @media (min-width: 640px) {
+    .ink-grid-cards { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  }
+  /* The Guild Order overview directory (guild-order-overview.jsx): six compact ledger rows, one
+     per area. Single column on a phone so nothing crowds; two columns from tablet width up since
+     each row is short enough that a single column starts to look sparse and over-long. Rows stay
+     the same compact shape at both widths — this never turns into a grid of tall square cards. */
+  .go-directory { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 560px) {
+    .go-directory { grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  }
+  .go-directory-row:active { background: linear-gradient(160deg, rgba(46,40,26,0.65), rgba(28,23,18,0.65)) !important; }
+  @media (hover: hover) {
+    .go-directory-row:hover { border-color: rgba(232,196,104,0.55) !important; }
+  }
+  /* Generic horizontal-scroll carousel row — the same pattern the Home bookshelf (.shelf-scroll)
+     and the Grand Library's shelf rows (.gl-shelf-scroll) already hand-built for their own
+     bespoke wooden-shelf look, made reusable for any future row that wants the same "intentional
+     carousel" behavior (snap-to-item, no visible scrollbar) without the shelf dressing. */
+  .ink-hscroll {
+    display: flex; align-items: flex-start; gap: 14px; overflow-x: auto; overflow-y: hidden;
+    scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .ink-hscroll::-webkit-scrollbar { display: none; }
+  .ink-hscroll > * { flex: 0 0 auto; scroll-snap-align: start; }
+  /* Interactive map viewer (interactive-map-frame.jsx): a pan/zoom "camera" already reads the
+     rendered image's actual size at load time and works entirely in percent-of-image space for
+     pin placement, so it's already correct at any rendered size — these two caps only decide how
+     much of the map is visible before a reader needs to zoom at all. Raised in the same
+     tablet/laptop/desktop steps as everything else so a wide map gets to actually use a wide
+     screen instead of sitting in a letterboxed 640×480 the whole time. `!important` because both
+     properties are also set inline (as the correct phone-sized default) and inline styles
+     otherwise always win over a stylesheet rule, responsive or not. */
+  @media (min-width: 640px) {
+    .map-viewport { height: 520px !important; }
+    .map-viewport-image { max-width: 760px !important; max-height: 520px !important; }
+  }
+  @media (min-width: 1024px) {
+    .map-viewport { height: 620px !important; max-height: 66vh !important; }
+    .map-viewport-image { max-width: 1000px !important; max-height: 620px !important; }
+  }
+  @media (min-width: 1440px) {
+    .map-viewport { height: 700px !important; }
+    .map-viewport-image { max-width: 1200px !important; max-height: 700px !important; }
+  }
